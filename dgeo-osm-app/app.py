@@ -4,6 +4,9 @@ from __future__ import annotations
 GeoOSM – Place Authority Geocoder
 Streamlit app for geocoding NLI place name authority records via Nominatim.
 
+Cloud version: file upload via st.file_uploader; cache persisted as a
+downloadable JSON file (upload at start to resume, download to save progress).
+
 Processing flow (two phases):
   Phase 1 – instant: annotate rows, fetch Wikidata, resolve cache hits.
              Results appear immediately in the Review tab.
@@ -15,8 +18,7 @@ Processing flow (two phases):
 import json
 import math
 import time
-from io import BytesIO   # still needed for the Excel download buffer
-from pathlib import Path
+from io import BytesIO
 
 import pandas as pd
 import streamlit as st
@@ -58,30 +60,25 @@ button[kind="primary"]:hover {
 </style>
 """, unsafe_allow_html=True)
 
-CACHE_FILE = Path(__file__).parent.parent / "nominatim_cache.json"
-
 # ── Session state ──────────────────────────────────────────────────────────────
 
 def _init_state():
     if "cache" not in st.session_state:
         st.session_state.cache = {}
-        if CACHE_FILE.exists():
-            with open(CACHE_FILE, encoding="utf-8") as f:
-                st.session_state.cache = json.load(f)
 
-    # geocoding phases: "idle" → "ready" → "done"
     defaults = {
-        "phase":           "idle",   # idle | ready | done
-        "all_rows":        [],       # all annotated row dicts
-        "pending_rows":    [],       # rows still needing Nominatim
-        "qid_to_osm":      {},       # Wikidata → OSM relation ID
-        "result_rows":     [],       # completed output row dicts
-        "review_status":   {},       # mmsid → confirmed|rejected|pending
-        "overrides":       {},       # mmsid → result dict (manual pick)
-        "selected_idx":    0,
-        "research_idx":    None,
+        "phase":               "idle",
+        "all_rows":            [],
+        "pending_rows":        [],
+        "qid_to_osm":          {},
+        "result_rows":         [],
+        "review_status":       {},
+        "overrides":           {},
+        "selected_idx":        0,
+        "research_idx":        None,
         "research_candidates": [],
-        "last_file_name":  None,
+        "last_file_name":      None,
+        "_cache_file_loaded":  None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -135,14 +132,6 @@ def _row_effective(row: dict) -> dict:
     return row
 
 
-def _save_cache():
-    try:
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(st.session_state.cache, f, ensure_ascii=False)
-    except Exception:
-        pass
-
-
 def _results_df() -> pd.DataFrame:
     if not st.session_state.result_rows:
         return pd.DataFrame()
@@ -155,7 +144,7 @@ def _eta_str(n_pending: int) -> str:
         return f"~{secs}s"
     return f"~{secs // 60}m {secs % 60}s"
 
-# ── Map renderer (built-in st.map — no third-party component) ─────────────────
+# ── Map renderer ───────────────────────────────────────────────────────────────
 
 def show_map(row: dict) -> None:
     lat = row.get("lat")
@@ -164,11 +153,11 @@ def show_map(row: dict) -> None:
         try:
             source = row.get("source", "")
             if "confirmed" in source or source in ("A-lookup", "manual-override"):
-                color = [46, 204, 113, 120]    # green, semi-transparent
+                color = [46, 204, 113, 120]
             elif "uncertain" in source:
-                color = [243, 156, 18, 120]    # orange, semi-transparent
+                color = [243, 156, 18, 120]
             else:
-                color = [231, 76, 60, 120]     # red, semi-transparent
+                color = [231, 76, 60, 120]
 
             st.map(
                 pd.DataFrame({"lat": [float(lat)], "lon": [float(lon)]}),
@@ -188,11 +177,50 @@ with st.sidebar:
     st.caption("Place Authority Geocoder")
     st.divider()
 
-    file_path_input = st.text_input(
-        "Excel file path",
-        placeholder=r"C:\path\to\records.xlsx",
-        help="Full path to the authority records Excel file on this computer",
+    # ── Excel file upload ──────────────────────────────────────────────────────
+    uploaded_file = st.file_uploader(
+        "Authority records (.xlsx / .xls)",
+        type=["xlsx", "xls"],
+        help="Upload the Excel file with columns: MMS ID, 151, 024, 451",
     )
+
+    st.divider()
+
+    # ── Cache: upload to resume a previous session ─────────────────────────────
+    st.markdown("**Cache** (optional)")
+    cache_upload = st.file_uploader(
+        "Resume from saved cache (.json)",
+        type=["json"],
+        help="Upload a nominatim_cache.json downloaded from a previous session",
+        key="cache_uploader",
+    )
+    if cache_upload is not None:
+        if st.session_state["_cache_file_loaded"] != cache_upload.name:
+            try:
+                loaded = json.loads(cache_upload.getvalue().decode("utf-8"))
+                if isinstance(loaded, dict):
+                    st.session_state.cache.update(loaded)
+                    st.session_state["_cache_file_loaded"] = cache_upload.name
+            except Exception:
+                st.error("Could not parse the cache file.")
+
+    n_cache = len(st.session_state.cache)
+    st.caption(f"{n_cache} cache entries loaded")
+
+    if n_cache:
+        cache_json = json.dumps(st.session_state.cache, ensure_ascii=False, indent=2)
+        st.download_button(
+            "⬇ Save cache (.json)",
+            data=cache_json.encode("utf-8"),
+            file_name="nominatim_cache.json",
+            mime="application/json",
+            width="stretch",
+            help="Download the current cache — upload it next session to skip already-geocoded records",
+        )
+        if st.button("Clear cache", width="stretch"):
+            st.session_state.cache = {}
+            st.session_state["_cache_file_loaded"] = None
+            st.rerun()
 
     st.divider()
 
@@ -209,14 +237,6 @@ with st.sidebar:
         value=50,
         help="How many uncached records to process per click",
     )
-
-    st.divider()
-
-    n_cache = len(st.session_state.cache)
-    st.caption(f"Cache: {n_cache} entries")
-    if st.button("Clear cache", width="stretch"):
-        st.session_state.cache = {}
-        st.rerun()
 
     st.divider()
 
@@ -254,29 +274,23 @@ with st.sidebar:
 
 st.title("Place Authority Geocoder")
 
-if not file_path_input or not file_path_input.strip():
-    st.info("Enter the full path to your authority records Excel file in the sidebar to get started.")
+if uploaded_file is None:
+    st.info("Upload your authority records Excel file in the sidebar to get started.")
     st.stop()
 
-input_path = Path(file_path_input.strip().strip('"').strip("'"))
-
-if not input_path.exists():
-    st.error(f"File not found: `{input_path}`")
-    st.stop()
-
-if input_path.suffix.lower() not in (".xlsx", ".xls"):
-    st.error("Please provide a path to an .xlsx or .xls file.")
+if uploaded_file.name.lower().split(".")[-1] not in ("xlsx", "xls"):
+    st.error("Please upload an .xlsx or .xls file.")
     st.stop()
 
 # ── Parse Excel ────────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
-def parse_excel(path_str: str) -> pd.DataFrame:
-    df = pd.read_excel(path_str, dtype=str)
+def parse_excel(file_bytes: bytes, file_name: str) -> pd.DataFrame:
+    df = pd.read_excel(BytesIO(file_bytes), dtype=str)
     df.columns = df.columns.str.strip()
     return df
 
-df_raw = parse_excel(str(input_path))
+df_raw = parse_excel(uploaded_file.getvalue(), uploaded_file.name)
 
 col_mms  = find_col(df_raw, "MMS") or df_raw.columns[0]
 col_0247 = find_col(df_raw, "024")
@@ -287,8 +301,8 @@ if col_151 is None:
     st.error("Could not find a '151' column. Please check column headers.")
     st.stop()
 
-# Reset state when a different file is selected
-file_key = str(input_path)
+# Reset state when a different file is uploaded
+file_key = uploaded_file.name
 if st.session_state.last_file_name != file_key:
     st.session_state.phase               = "idle"
     st.session_state.all_rows            = []
@@ -329,7 +343,7 @@ with st.expander("📋 File preview", expanded=(st.session_state.phase == "idle"
 if st.session_state.phase == "idle":
     st.subheader("Step 1 — Pre-scan")
     st.write(
-        "Checks the local cache and Wikidata for every record. "
+        "Checks the cache and Wikidata for every record. "
         "Cache hits appear immediately; uncached records are queued for Nominatim."
     )
 
@@ -392,7 +406,6 @@ if st.session_state.phase == "idle":
                 prog4.progress(1.0, text=f"✓ Loaded {len(cached_rows)} cached results")
             st.session_state.result_rows = results
 
-            _save_cache()
             st.session_state.phase = "ready"
             status.update(label="Pre-scan complete!", state="complete")
 
@@ -408,7 +421,6 @@ if st.session_state.phase in ("ready", "done"):
     n_pending = len(st.session_state.pending_rows)
     n_total   = len(st.session_state.all_rows)
 
-    # ── Overall progress bar (always visible) ─────────────────────────────────
     pct = n_done / n_total if n_total else 1.0
     pct_label = f"{pct*100:.0f}%"
     st.progress(
@@ -460,17 +472,20 @@ if st.session_state.phase in ("ready", "done"):
 
             elapsed_total = time.monotonic() - t_start
             status_text.markdown(
-                f"✓ Batch of {len(batch)} done in {elapsed_total:.0f}s"
+                f"✓ Batch of {len(batch)} done in {elapsed_total:.0f}s — "
+                "**save your cache** from the sidebar before closing!"
             )
             prog.progress(1.0)
 
             st.session_state.pending_rows = remaining
-            _save_cache()
             st.rerun()
 
     else:
         st.session_state.phase = "done"
-        st.success(f"All {n_total} records geocoded.")
+        st.success(
+            f"All {n_total} records geocoded. "
+            "Download the cache from the sidebar to save your progress."
+        )
 
     st.divider()
 
@@ -506,7 +521,6 @@ if st.session_state.phase in ("ready", "done"):
         with fc3:
             search_text = st.text_input("Search name", placeholder="Type to filter…")
 
-        # Build mask
         mask = pd.Series([True] * len(df))
         if filter_status == "Confirmed":
             mask &= df["source"].str.contains("confirmed|A-lookup|manual", na=False)
@@ -561,21 +575,20 @@ if st.session_state.phase in ("ready", "done"):
                     height=380,
                     hide_index=False,
                 )
-                # Only offer pending rows in the dropdown (confirmed and rejected are done)
+
                 unconfirmed_indices = [
                     i for i, r in enumerate(display_rows)
                     if st.session_state.review_status.get(r["MMS ID"], "pending")
                     not in ("confirmed", "rejected")
                 ]
                 if not unconfirmed_indices:
-                    unconfirmed_indices = list(range(len(display_rows)))  # fallback: show all
+                    unconfirmed_indices = list(range(len(display_rows)))
 
                 dropdown_labels = {
                     i: f"{display_rows[i]['MMS ID']} – {display_rows[i]['Name (Latin)'] or display_rows[i]['Name (EN)'] or '?'}"
                     for i in unconfirmed_indices
                 }
 
-                # Keep current selection if it's still in the list, else default to first
                 current = st.session_state.selected_idx
                 default = current if current in unconfirmed_indices else unconfirmed_indices[0]
 
@@ -594,10 +607,8 @@ if st.session_state.phase in ("ready", "done"):
                 eff_row = _row_effective(raw_row)
                 mmsid   = str(eff_row.get("MMSID", ""))
 
-                # Map
                 show_map(eff_row)
 
-                # Details
                 d1, d2 = st.columns(2)
                 with d1:
                     st.markdown(f"**MMS ID:** `{mmsid}`")
@@ -621,7 +632,6 @@ if st.session_state.phase in ("ready", "done"):
 
                 st.divider()
 
-                # Action buttons
                 rv = st.session_state.review_status.get(mmsid, "pending")
                 ba, bb, bc = st.columns(3)
                 with ba:
@@ -639,7 +649,6 @@ if st.session_state.phase in ("ready", "done"):
                         st.session_state.research_candidates = []
                         st.rerun()
 
-                # Re-search panel
                 if st.session_state.research_idx == idx:
                     st.divider()
                     st.markdown("**Re-search**")
@@ -725,7 +734,6 @@ if st.session_state.phase in ("ready", "done"):
     with tab_help:
         st.header("How the geocoding works")
 
-        # ── Source values (shown first so they are immediately visible) ──────────
         st.subheader("Source values explained")
 
         st.dataframe(
@@ -768,7 +776,6 @@ if st.session_state.phase in ("ready", "done"):
 
         st.divider()
 
-        # ── Geocoding process ────────────────────────────────────────────────────
         st.subheader("Path A — Records with a Wikidata ID (field 024)")
         st.markdown("""
 1. **Wikidata SPARQL** — queries Wikidata for the OSM relation ID linked via property **P402**.
@@ -808,7 +815,17 @@ so re-running the app will retry them.
 
         st.divider()
 
-        # ── Output columns ───────────────────────────────────────────────────────
+        st.subheader("Saving your progress")
+        st.markdown("""
+Because this app runs in the cloud, results are **not saved automatically**.
+
+- After each batch, click **⬇ Save cache (.json)** in the sidebar and keep the file.
+- Next session, upload the same `nominatim_cache.json` — every cached record resolves instantly without hitting Nominatim again.
+- When all records are geocoded, click **⬇ Download results (.xlsx)** for the full output.
+        """)
+
+        st.divider()
+
         st.subheader("Output columns")
 
         st.dataframe(

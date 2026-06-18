@@ -3,20 +3,13 @@ from __future__ import annotations
 """
 geocoder.py – geocoding helpers for the Streamlit app.
 
-Adapted from geocode_israel.py:
-- cache is a plain dict passed in (no global state / file I/O here)
-- nominatim_search accepts a dynamic country_code (or None = global)
-- nominatim_search_candidates returns top-N results for the review UI
-- no tqdm / file writes — progress is handled by the caller
+Cloud version: SSL verification is enabled (no corporate proxy).
 """
 
 import re
 import time
 import logging
 import requests
-import urllib3
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 log = logging.getLogger(__name__)
 
@@ -158,7 +151,7 @@ def _nominatim_get(url: str, params: dict) -> list:
             r = requests.get(
                 url, params=params,
                 headers={"User-Agent": USER_AGENT},
-                timeout=10, verify=False,
+                timeout=10,
             )
             if r.status_code in (429, 502, 503, 504):
                 time.sleep(10 * attempt)
@@ -310,7 +303,7 @@ def fetch_osm_ids_from_wikidata(cache: dict, qids: list[str]) -> dict[str, str]:
                     SPARQL_ENDPOINT,
                     params={"query": query, "format": "json"},
                     headers={"User-Agent": USER_AGENT},
-                    timeout=60, verify=False,
+                    timeout=60,
                 )
                 if r.status_code in (429, 502, 503, 504):
                     time.sleep(10 * attempt)

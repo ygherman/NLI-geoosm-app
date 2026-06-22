@@ -1,0 +1,39 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local app version (cloud version is in dgeo-osm-cloud/)
+dgeo-osm-app/
+
+# API cache — runtime artifact
+nominatim_cache.json
+
+# Data files — input records and geocoded output
+*.xlsx
+*.xls
+*.csv
+
+# Input data folder
+שליפה חדשה/
+
+# Local scripts and notebooks (not part of the deployed app)
+geocode_israel.py
+geocode_israel.ipynb
+geocodeisraelpy.pptx
+coordinates_project.ipynb
+main.py
+
+# Local dev environment
+.python-version
+pyproject.toml
+uv.lock
+
+# IDE settings
+.vscode/

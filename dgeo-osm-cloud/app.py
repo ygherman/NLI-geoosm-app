@@ -144,6 +144,55 @@ def _eta_str(n_pending: int) -> str:
         return f"~{secs}s"
     return f"~{secs // 60}m {secs % 60}s"
 
+
+def _cache_confirmed(mmsid: str, result_row: dict, cand_raw: dict | None = None) -> None:
+    """Write a user-confirmed result to the session cache for every name variant.
+
+    Next prescan: is_cached() will find it and geocode_row() resolves instantly.
+    cand_raw: pass the raw _parse_item dict when the result comes from re-search.
+    """
+    orig_row = next(
+        (r for r in st.session_state.all_rows if str(r.get("MMSID")) == mmsid), None
+    )
+    if not orig_row:
+        return
+    names        = orig_row.get("_all_names", [])
+    country_code = orig_row.get("_country_code")
+    if not names:
+        return
+
+    if cand_raw is not None:
+        entry = {**cand_raw, "score": 1.0}
+    else:
+        if not result_row.get("osm_id"):
+            return
+        entry = {
+            "osm_type":       result_row.get("osm_type"),
+            "osm_id":         result_row.get("osm_id"),
+            "lat":            result_row.get("lat"),
+            "lon":            result_row.get("lon"),
+            "d":              result_row.get("34$d"),
+            "e":              result_row.get("34$e"),
+            "f":              result_row.get("34$f"),
+            "g":              result_row.get("34$g"),
+            "importance":     0.0,
+            "score":          1.0,
+            "osm_class":      result_row.get("osm_class"),
+            "osm_place_type": result_row.get("osm_place_type"),
+            "wikidata_osm":   result_row.get("wikidata_osm"),
+            "wikipedia":      result_row.get("wikipedia"),
+            "name_he":        result_row.get("name_he"),
+            "name_en":        result_row.get("name_en"),
+            "name_ar":        result_row.get("name_ar"),
+            "alt_name":       result_row.get("alt_name"),
+            "display_name":   result_row.get("display_name"),
+        }
+
+    cc_part = f"|cc={country_code}" if country_code else ""
+    for name in names:
+        st.session_state.cache[f"search:{name.lower()}{cc_part}"] = entry
+
+
 # ── Map renderer ───────────────────────────────────────────────────────────────
 
 def show_map(row: dict) -> None:
@@ -638,6 +687,7 @@ if st.session_state.phase in ("ready", "done"):
                     if st.button("✅ Confirm", width="stretch",
                                  type="primary" if rv != "confirmed" else "secondary"):
                         st.session_state.review_status[mmsid] = "confirmed"
+                        _cache_confirmed(mmsid, eff_row)
                         st.rerun()
                 with bb:
                     if st.button("❌ Reject", width="stretch"):
@@ -691,6 +741,7 @@ if st.session_state.phase in ("ready", "done"):
                             st.session_state.review_status[mmsid]  = "confirmed"
                             st.session_state.research_idx           = None
                             st.session_state.research_candidates    = []
+                            _cache_confirmed(mmsid, eff_row, cand_raw=cand)
                             st.rerun()
 
     # ── Stats tab ───────────────────────────────────────────────────────────────

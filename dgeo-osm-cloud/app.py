@@ -615,6 +615,7 @@ if st.session_state.phase in ("ready", "done"):
                     rv_sym = {"confirmed": "✅", "rejected": "❌", "pending": "…"}[rv]
                     icon   = SOURCE_BADGE.get(row.get("source", ""), "⚪")
                     display_rows.append({
+                        "☑":                False,
                         "✓":                rv_sym,
                         "Match":            icon,
                         "MMS ID":           _mmsid,
@@ -625,21 +626,31 @@ if st.session_state.phase in ("ready", "done"):
                         "Source":           row.get("source") or "",
                     })
 
-                st.dataframe(
+                read_only_cols = ["✓", "Match", "MMS ID", "NLI name (151)",
+                                  "OSM name (EN)", "Country", "Score", "Source"]
+                edited_df = st.data_editor(
                     pd.DataFrame(display_rows),
+                    column_config={
+                        "☑": st.column_config.CheckboxColumn("☑", default=False),
+                    },
+                    disabled=read_only_cols,
                     width="stretch",
                     height=380,
-                    hide_index=False,
+                    hide_index=True,
+                    key="review_table",
                 )
 
+                checked_mmsids = edited_df[edited_df["☑"]]["MMS ID"].tolist()
                 if st.button(
-                    f"✅ Confirm all {len(df_view)} visible records",
-                    help="Marks every record currently shown in the table as confirmed and caches their results.",
+                    f"✅ Confirm checked ({len(checked_mmsids)})",
+                    disabled=len(checked_mmsids) == 0,
+                    help="Confirm all ticked rows and cache their results.",
                 ):
-                    for _, row in df_view.iterrows():
-                        _mid = str(row.get("MMSID", ""))
+                    for _mid in checked_mmsids:
                         st.session_state.review_status[_mid] = "confirmed"
-                        _cache_confirmed(_mid, row.to_dict())
+                        _row_data = df_view[df_view["MMSID"].astype(str) == _mid]
+                        if not _row_data.empty:
+                            _cache_confirmed(_mid, _row_data.iloc[0].to_dict())
                     st.rerun()
 
                 unconfirmed_indices = [

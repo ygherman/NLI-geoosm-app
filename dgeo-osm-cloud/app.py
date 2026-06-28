@@ -695,8 +695,8 @@ if st.session_state.phase in ("ready", "done"):
                         st.session_state.research_candidates = []
                         st.rerun()
 
-                st.divider()
-                show_map(eff_row)
+                with st.expander("🗺️ Map", expanded=False):
+                    show_map(eff_row)
 
                 if st.session_state.research_idx == idx:
                     st.divider()

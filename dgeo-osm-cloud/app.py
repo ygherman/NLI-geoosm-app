@@ -679,9 +679,9 @@ if st.session_state.phase in ("ready", "done"):
                                     "osm_type","osm_id","osm_class","osm_place_type",
                                     "wikidata_osm","wikipedia",
                                     "name_he","name_en","name_ar","alt_name","display_name",
-                                    "match_score",
                                 ]
                             }
+                            override["match_score"] = cand["score"]
                             override["34$d"] = cand["d"]
                             override["34$e"] = cand["e"]
                             override["34$f"] = cand["f"]

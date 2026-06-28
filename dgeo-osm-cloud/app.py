@@ -598,24 +598,31 @@ if st.session_state.phase in ("ready", "done"):
         if df_view.empty:
             st.info("No records match the current filter.")
         else:
+            # Resolve selected row before columns so eff_row is available
+            # for the full-width map rendered below the two-column section.
+            idx     = min(st.session_state.selected_idx, len(df_view) - 1)
+            raw_row = df_view.iloc[idx].to_dict()
+            eff_row = _row_effective(raw_row)
+            mmsid   = str(eff_row.get("MMSID", ""))
+
             left_col, right_col = st.columns([55, 45])
 
             with left_col:
                 display_rows = []
                 for _, row in df_view.iterrows():
-                    mmsid  = str(row.get("MMSID", ""))
-                    rv     = st.session_state.review_status.get(mmsid, "pending")
+                    _mmsid = str(row.get("MMSID", ""))
+                    rv     = st.session_state.review_status.get(_mmsid, "pending")
                     rv_sym = {"confirmed": "✅", "rejected": "❌", "pending": "…"}[rv]
                     icon   = SOURCE_BADGE.get(row.get("source", ""), "⚪")
                     display_rows.append({
-                        "":            rv_sym,
-                        "M":           icon,
-                        "MMS ID":      mmsid,
-                        "Name (Latin)": row.get("name_lat") or "",
-                        "Name (EN)":   row.get("name_en") or "",
-                        "Country":     row.get("country_code") or "",
-                        "Score":       _score_label(row.get("match_score")),
-                        "Source":      row.get("source") or "",
+                        "✓":                rv_sym,
+                        "Match":            icon,
+                        "MMS ID":           _mmsid,
+                        "NLI name (151)":   row.get("name_lat") or "",
+                        "OSM name (EN)":    row.get("name_en") or "",
+                        "Country":          row.get("country_code") or "",
+                        "Score":            _score_label(row.get("match_score")),
+                        "Source":           row.get("source") or "",
                     })
 
                 st.dataframe(
@@ -624,6 +631,16 @@ if st.session_state.phase in ("ready", "done"):
                     height=380,
                     hide_index=False,
                 )
+
+                if st.button(
+                    f"✅ Confirm all {len(df_view)} visible records",
+                    help="Marks every record currently shown in the table as confirmed and caches their results.",
+                ):
+                    for _, row in df_view.iterrows():
+                        _mid = str(row.get("MMSID", ""))
+                        st.session_state.review_status[_mid] = "confirmed"
+                        _cache_confirmed(_mid, row.to_dict())
+                    st.rerun()
 
                 unconfirmed_indices = [
                     i for i, r in enumerate(display_rows)
@@ -634,7 +651,7 @@ if st.session_state.phase in ("ready", "done"):
                     unconfirmed_indices = list(range(len(display_rows)))
 
                 dropdown_labels = {
-                    i: f"{display_rows[i]['MMS ID']} – {display_rows[i]['Name (Latin)'] or display_rows[i]['Name (EN)'] or '?'}"
+                    i: f"{display_rows[i]['MMS ID']} – {display_rows[i]['NLI name (151)'] or display_rows[i]['OSM name (EN)'] or '?'}"
                     for i in unconfirmed_indices
                 }
 
@@ -651,11 +668,6 @@ if st.session_state.phase in ("ready", "done"):
                 st.session_state.selected_idx = chosen
 
             with right_col:
-                idx = min(st.session_state.selected_idx, len(df_view) - 1)
-                raw_row = df_view.iloc[idx].to_dict()
-                eff_row = _row_effective(raw_row)
-                mmsid   = str(eff_row.get("MMSID", ""))
-
                 d1, d2 = st.columns(2)
                 with d1:
                     st.markdown(f"**MMS ID:** `{mmsid}`")
@@ -695,53 +707,54 @@ if st.session_state.phase in ("ready", "done"):
                         st.session_state.research_candidates = []
                         st.rerun()
 
-                with st.expander("🗺️ Map", expanded=False):
-                    show_map(eff_row)
+            # Full-width map below both columns — page scrollbar reaches it naturally
+            with st.expander("🗺️ Map", expanded=False):
+                show_map(eff_row)
 
-                if st.session_state.research_idx == idx:
-                    st.divider()
-                    st.markdown("**Re-search**")
-                    default_q = eff_row.get("name_lat") or eff_row.get("match_name") or ""
-                    query = st.text_input("Search query", value=default_q, key="research_q")
-                    cc_opts = ["(global – no filter)"] + sorted(set(COUNTRY_NAME_TO_CODE.values()))
-                    cc_def  = eff_row.get("country_code") or "(global – no filter)"
-                    cc_sel  = st.selectbox("Country code", cc_opts,
-                                           index=cc_opts.index(cc_def) if cc_def in cc_opts else 0,
-                                           key="research_cc")
-                    cc_use = None if cc_sel == "(global – no filter)" else cc_sel
+            if st.session_state.research_idx == idx:
+                st.divider()
+                st.markdown("**Re-search**")
+                default_q = eff_row.get("name_lat") or eff_row.get("match_name") or ""
+                query = st.text_input("Search query", value=default_q, key="research_q")
+                cc_opts = ["(global – no filter)"] + sorted(set(COUNTRY_NAME_TO_CODE.values()))
+                cc_def  = eff_row.get("country_code") or "(global – no filter)"
+                cc_sel  = st.selectbox("Country code", cc_opts,
+                                       index=cc_opts.index(cc_def) if cc_def in cc_opts else 0,
+                                       key="research_cc")
+                cc_use = None if cc_sel == "(global – no filter)" else cc_sel
 
-                    if st.button("Search", key="do_research"):
-                        with st.spinner("Searching Nominatim…"):
-                            st.session_state.research_candidates = \
-                                nominatim_search_candidates(query, cc_use, limit=5)
+                if st.button("Search", key="do_research"):
+                    with st.spinner("Searching Nominatim…"):
+                        st.session_state.research_candidates = \
+                            nominatim_search_candidates(query, cc_use, limit=5)
 
-                    for ci, cand in enumerate(st.session_state.research_candidates):
-                        label = (
-                            f"{_score_label(cand['score'])}  "
-                            f"{(cand.get('name_en') or cand.get('display_name') or '?')[:60]}  "
-                            f"({cand.get('osm_place_type','')})"
-                        )
-                        if st.button(label, key=f"pick_{ci}"):
-                            override = {
-                                k: cand[k] for k in [
-                                    "lat","lon","d","e","f","g",
-                                    "osm_type","osm_id","osm_class","osm_place_type",
-                                    "wikidata_osm","wikipedia",
-                                    "name_he","name_en","name_ar","alt_name","display_name",
-                                ]
-                            }
-                            override["match_score"] = cand["score"]
-                            override["34$d"] = cand["d"]
-                            override["34$e"] = cand["e"]
-                            override["34$f"] = cand["f"]
-                            override["34$g"] = cand["g"]
-                            override["source"] = "manual-override"
-                            st.session_state.overrides[mmsid] = override
-                            st.session_state.review_status[mmsid]  = "confirmed"
-                            st.session_state.research_idx           = None
-                            st.session_state.research_candidates    = []
-                            _cache_confirmed(mmsid, eff_row, cand_raw=cand)
-                            st.rerun()
+                for ci, cand in enumerate(st.session_state.research_candidates):
+                    label = (
+                        f"{_score_label(cand['score'])}  "
+                        f"{(cand.get('name_en') or cand.get('display_name') or '?')[:60]}  "
+                        f"({cand.get('osm_place_type','')})"
+                    )
+                    if st.button(label, key=f"pick_{ci}"):
+                        override = {
+                            k: cand[k] for k in [
+                                "lat","lon","d","e","f","g",
+                                "osm_type","osm_id","osm_class","osm_place_type",
+                                "wikidata_osm","wikipedia",
+                                "name_he","name_en","name_ar","alt_name","display_name",
+                            ]
+                        }
+                        override["match_score"] = cand["score"]
+                        override["34$d"] = cand["d"]
+                        override["34$e"] = cand["e"]
+                        override["34$f"] = cand["f"]
+                        override["34$g"] = cand["g"]
+                        override["source"] = "manual-override"
+                        st.session_state.overrides[mmsid] = override
+                        st.session_state.review_status[mmsid]  = "confirmed"
+                        st.session_state.research_idx           = None
+                        st.session_state.research_candidates    = []
+                        _cache_confirmed(mmsid, eff_row, cand_raw=cand)
+                        st.rerun()
 
     # ── Stats tab ───────────────────────────────────────────────────────────────
     with tab_stats:

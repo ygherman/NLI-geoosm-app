@@ -656,8 +656,6 @@ if st.session_state.phase in ("ready", "done"):
                 eff_row = _row_effective(raw_row)
                 mmsid   = str(eff_row.get("MMSID", ""))
 
-                show_map(eff_row)
-
                 d1, d2 = st.columns(2)
                 with d1:
                     st.markdown(f"**MMS ID:** `{mmsid}`")
@@ -679,8 +677,6 @@ if st.session_state.phase in ("ready", "done"):
                         f"[Wikipedia ↗](https://{lang}.wikipedia.org/wiki/{title.replace(' ', '_')})"
                     )
 
-                st.divider()
-
                 rv = st.session_state.review_status.get(mmsid, "pending")
                 ba, bb, bc = st.columns(3)
                 with ba:
@@ -698,6 +694,9 @@ if st.session_state.phase in ("ready", "done"):
                         st.session_state.research_idx        = idx
                         st.session_state.research_candidates = []
                         st.rerun()
+
+                st.divider()
+                show_map(eff_row)
 
                 if st.session_state.research_idx == idx:
                     st.divider()

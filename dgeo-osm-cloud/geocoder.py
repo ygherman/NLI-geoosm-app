@@ -262,12 +262,31 @@ def nominatim_search_best(
     country_code: str | None,
     match_threshold: float = 0.65,
 ) -> tuple[dict, str | None]:
-    """Try every name variant; return (best_result, winning_name)."""
+    """Try every name variant; return (best_result, winning_name).
+
+    Cache-only first pass: if any cached result scores at or above the
+    threshold, return it immediately — no Nominatim calls at all.
+    """
     best, best_name = _empty_result(), None
+
+    # Pass 1: cache only (no network)
     for name in names:
+        cc_part = f"|cc={country_code}" if country_code else ""
+        hit = _cache_read(cache, f"search:{name.lower()}{cc_part}")
+        if hit is not None and hit.get("score", 0) > best.get("score", 0):
+            best, best_name = hit, name
+
+    if best.get("osm_id") and best.get("score", 0) >= match_threshold:
+        return best, best_name  # all cached, no Nominatim needed
+
+    # Pass 2: Nominatim calls for names not already in cache
+    for name in names:
+        cc_part = f"|cc={country_code}" if country_code else ""
+        if _cache_read(cache, f"search:{name.lower()}{cc_part}") is not None:
+            continue
         try:
             result = nominatim_search(cache, name, country_code, match_threshold)
-            if result["score"] > best["score"]:
+            if result.get("score", 0) > best.get("score", 0):
                 best, best_name = result, name
         except Exception as exc:
             log.warning(f"Search failed for '{name}': {exc}")
